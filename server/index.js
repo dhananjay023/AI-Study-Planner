@@ -20,11 +20,15 @@ function init() {
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`).run();
   db.prepare(`CREATE TABLE IF NOT EXISTS study_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    subject_id INTEGER,
-    start_time TEXT,
-    end_time TEXT,
-    duration_minutes INTEGER
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  subject_id INTEGER,
+  topic_id INTEGER,
+  start_time TEXT,
+  end_time TEXT,
+  duration_minutes INTEGER,
+  type TEXT DEFAULT 'pomodoro',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`).run();
   db.prepare(`CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +61,62 @@ app.get('/api/subjects/:id/topics', (req, res) => {
   const rows = db.prepare('SELECT * FROM topics WHERE subject_id = ? ORDER BY created_at').all(subjectId);
   res.json(rows);
 });
+// Start a session (creates a row with start_time)
+app.post('/api/sessions/start', (req, res) => {
+  try {
+    const { user_id = null, subject_id = null, topic_id = null, type = 'pomodoro' } = req.body;
+    const start_time = new Date().toISOString();
+    const info = db.prepare(
+      `INSERT INTO study_sessions (user_id, subject_id, topic_id, start_time, type)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(user_id, subject_id, topic_id, start_time, type);
+    const session = db.prepare('SELECT * FROM study_sessions WHERE id = ?').get(info.lastInsertRowid);
+    res.json(session);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to start session' });
+  }
+});
+
+// Stop a session (set end_time & duration_minutes)
+app.post('/api/sessions/stop', (req, res) => {
+  try {
+    const { session_id } = req.body;
+    if (!session_id) return res.status(400).json({ error: 'session_id required' });
+    const session = db.prepare('SELECT start_time FROM study_sessions WHERE id = ?').get(session_id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const end_time = new Date().toISOString();
+    const duration_minutes = Math.max(0, Math.round((new Date(end_time) - new Date(session.start_time)) / 60000));
+    db.prepare('UPDATE study_sessions SET end_time = ?, duration_minutes = ? WHERE id = ?')
+      .run(end_time, duration_minutes, session_id);
+    const updated = db.prepare('SELECT * FROM study_sessions WHERE id = ?').get(session_id);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to stop session' });
+  }
+});
+
+// Get sessions (optionally filter by subject/topic)
+app.get('/api/sessions', (req, res) => {
+  try {
+    const { subject_id, topic_id, from, to } = req.query;
+    let q = 'SELECT * FROM study_sessions WHERE 1=1';
+    const params = [];
+    if (subject_id) { q += ' AND subject_id = ?'; params.push(subject_id); }
+    if (topic_id) { q += ' AND topic_id = ?'; params.push(topic_id); }
+    if (from) { q += ' AND start_time >= ?'; params.push(from); }
+    if (to) { q += ' AND start_time <= ?'; params.push(to); }
+    q += ' ORDER BY start_time DESC';
+    const rows = db.prepare(q).all(...params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+
 // Create a topic under a subject
 app.post('/api/subjects/:id/topics', (req, res) => {
   const subjectId = req.params.id;
