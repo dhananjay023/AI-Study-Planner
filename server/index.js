@@ -19,13 +19,21 @@ function init() {
     color TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`).run();
-
   db.prepare(`CREATE TABLE IF NOT EXISTS study_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subject_id INTEGER,
     start_time TEXT,
     end_time TEXT,
     duration_minutes INTEGER
+  )`).run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    estimated_minutes INTEGER DEFAULT 30,
+    completed INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(subject_id) REFERENCES subjects(id)
   )`).run();
 }
 init();
@@ -42,6 +50,45 @@ app.post('/api/subjects', (req, res) => {
     'INSERT INTO subjects (name, priority, color) VALUES (?, ?, ?)'
   ).run(name, priority, color);
   res.json({ id: info.lastInsertRowid });
+});
+
+app.get('/api/subjects/:id/topics', (req, res) => {
+  const subjectId = req.params.id;
+  const rows = db.prepare('SELECT * FROM topics WHERE subject_id = ? ORDER BY created_at').all(subjectId);
+  res.json(rows);
+});
+// Create a topic under a subject
+app.post('/api/subjects/:id/topics', (req, res) => {
+  const subjectId = req.params.id;
+  const { title, estimated_minutes } = req.body;
+  if(!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
+  const info = db.prepare(
+    'INSERT INTO topics (subject_id, title, estimated_minutes) VALUES (?, ?, ?)'
+  ).run(subjectId, title.trim(), estimated_minutes || 30);
+  const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(info.lastInsertRowid);
+  res.json(topic);
+});
+
+// Update topic (title, estimated_minutes, completed)
+app.put('/api/topics/:id', (req, res) => {
+  const id = req.params.id;
+  const { title, estimated_minutes, completed } = req.body;
+  const existing = db.prepare('SELECT * FROM topics WHERE id = ?').get(id);
+  if(!existing) return res.status(404).json({ error: 'Topic not found' });
+
+  db.prepare('UPDATE topics SET title = ?, estimated_minutes = ?, completed = ? WHERE id = ?')
+    .run(title ?? existing.title, estimated_minutes ?? existing.estimated_minutes, completed ?? existing.completed, id);
+
+  const updated = db.prepare('SELECT * FROM topics WHERE id = ?').get(id);
+  res.json(updated);
+});
+
+// Delete topic
+app.delete('/api/topics/:id', (req, res) => {
+  const id = req.params.id;
+  const info = db.prepare('DELETE FROM topics WHERE id = ?').run(id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Topic not found' });
+  res.json({ success: true });
 });
 
 // start server
